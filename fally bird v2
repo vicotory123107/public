@@ -1,0 +1,28 @@
+// Pin definition (Connect a push button between Pin 4 and GND)
+const int BUTTON_PIN = 4; 
+
+// Track previous button state to prevent sending "FLAP" continuously while holding
+int lastButtonState = HIGH; 
+
+void setup() {
+  // Initialize Serial communication. Match this baud rate in Unity!
+  Serial.begin(115200); 
+
+  // Use internal pull-up resistor so no external resistor is needed
+  pinMode(BUTTON_PIN, INPUT_PULLUP);
+}
+
+void loop() {
+  int currentButtonState = digitalRead(BUTTON_PIN);
+
+  // Detect when the button is pressed down (transitions from HIGH to LOW)
+  if (lastButtonState == HIGH && currentButtonState == LOW) {
+    // Send "FLAP" followed by a newline so sp.ReadLine() can pick it up
+    Serial.println("FLAP"); 
+    
+    // Small delay to debounce mechanical button noise
+    delay(50); 
+  }
+
+  lastButtonState = currentButtonState;
+}
