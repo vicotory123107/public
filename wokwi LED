@@ -1,0 +1,63 @@
+#include <WiFi.h>
+
+int IRSensor = 27;     // IR sensor module connected to GPIO 27 
+int LED = 26;          // LED connected to GPIO 26 
+int BUZZER_PIN = 18;   // Connect the buzzer's positive pin to GPIO 18  
+
+// Wokwi Virtual Wi-Fi Credentials
+const char* ssid = "Wokwi-GUEST";
+const char* password = ""; // Wokwi-GUEST does not use a password
+
+void setup() { 
+   Serial.begin(115200);             // Init Serial at 115200 Baud Rate 
+   Serial.println("Serial Working"); // Test to check if serial is working 
+      
+   pinMode(IRSensor, INPUT);         // IR Sensor pin as INPUT 
+   pinMode(LED, OUTPUT);             // LED Pin as OUTPUT 
+   pinMode(BUZZER_PIN, OUTPUT);      // Buzzer pin as OUTPUT 
+
+   // Begin connection to Wokwi's virtual Wi-Fi network
+   Serial.print("Connecting to Wokwi-GUEST Wi-Fi... ");
+   WiFi.begin(ssid, password);
+
+   // We commented out the blocking "while" loop below so the simulator 
+   // doesn't freeze or "run out of time" if the Wi-Fi fails to connect.
+   /*
+   while (WiFi.status() != WL_CONNECTED) {
+     delay(500);
+     Serial.print(".");
+   }
+   Serial.println("\nWiFi connected!");
+   Serial.print("IP address: ");
+   Serial.println(WiFi.localIP());
+   */
+   
+   Serial.println(" Setup Complete! Alarm active.");
+} 
+
+void loop() { 
+   int IR1 = digitalRead(IRSensor); 
+   Serial.println(IR1);              // Print the IR sensor state 
+      
+   if (IR1 == 0) // Motion detected 
+   { 
+     digitalWrite(LED, HIGH);        // Turn on the LED 
+     Serial.println("Motion Detected! ALARM TRIGGERED!"); 
+     
+     // Siren Alarm Sound: Alternates between high and low tones 
+     for (int i = 0; i < 3; i++) {   // Repeat the siren cycle 3 times 
+       tone(BUZZER_PIN, 800);        // Low pitch 
+       delay(150); 
+       tone(BUZZER_PIN, 1200);       // High pitch 
+       delay(150); 
+     }
+     noTone(BUZZER_PIN);             // Stop the tone cleanly after the 3 cycles
+   } 
+   else // No motion 
+   { 
+     digitalWrite(LED, LOW);         // Turn off the LED 
+     noTone(BUZZER_PIN);             // Ensure the buzzer is completely silent 
+     Serial.println("Motion Ended!"); 
+     delay(100);                     // Reduced delay for faster sensor polling
+   } 
+}
