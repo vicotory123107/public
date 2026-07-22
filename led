@@ -1,0 +1,71 @@
+#include <WiFi.h>
+#include <WebServer.h>
+
+// --- Pin Configurations ---
+const int PIRSensor = 27;     // Sensor data pin connected to GPIO 27
+const int LED = 26;           // LED connected to GPIO 26
+const int BUZZER_PIN = 18;    // Buzzer connected to GPIO 18  
+
+// --- Access Point Credentials ---
+const char* ap_ssid = "ESP32_Alarm_System";
+const char* ap_password = "12345678"; 
+
+WebServer server(80);
+String currentStatus = "Secure";
+
+// Web server page configuration
+void handleRoot() {
+  String html = "<!DOCTYPE html><html>";
+  html += "<head><meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">";
+  html += "<style>html { font-family: Helvetica; display: inline-block; margin: 0px auto; text-align: center;}";
+  html += "h1 {color: #333333;} .status {font-size: 24px; font-weight: bold; margin: 20px; color: " + String((currentStatus == "Secure") ? "green" : "red") + ";}</style>";
+  html += "<meta http-equiv=\"refresh\" content=\"2\">"; // Web page auto-refreshes every 2 seconds
+  html += "</head><body>";
+  html += "<h1>ESP32 Security Alarm System</h1>";
+  html += "<p>System Status: <span class=\"status\">" + currentStatus + "</span></p>";
+  html += "</body></html>";
+  
+  server.send(200, "text/html", html);
+}
+
+void setup() { 
+   Serial.begin(115200);             
+   
+   pinMode(PIRSensor, INPUT);         
+   pinMode(LED, OUTPUT);             
+   pinMode(BUZZER_PIN, OUTPUT);      
+
+   // Start the local Access Point network
+   WiFi.softAP(ap_ssid, ap_password);
+   
+   server.on("/", handleRoot); 
+   server.begin();             
+   Serial.println("Security System Active and Ready.");
+} 
+
+void loop() { 
+   server.handleClient(); // Keeps your 192.168.4.1 web page running
+
+   int motion = digitalRead(PIRSensor); 
+      
+   // Checks if the sensor reads HIGH (1) for motion
+   if (motion == 1) 
+   { 
+     currentStatus = "ALARM TRIGGERED!";
+     digitalWrite(LED, HIGH);        
+     Serial.println("!!! Motion Detected - Sounding Alarm !!!"); 
+     
+     // Alternating siren tones
+     tone(BUZZER_PIN, 900);        // Lower tone
+     delay(100); 
+     tone(BUZZER_PIN, 1400);       // Higher tone
+     delay(100); 
+   } 
+   else // No motion detected
+   { 
+     currentStatus = "Secure";
+     digitalWrite(LED, LOW);         
+     noTone(BUZZER_PIN);           // Shuts off the sound immediately
+     delay(50);                    // Small delay to stabilize the loop
+   } 
+}
