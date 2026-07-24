@@ -1,0 +1,333 @@
+using UnityEngine;
+using UnityEngine.InputSystem;
+using UnityEngine.UI;
+using System;
+using System.IO.Ports;
+using System.Threading;
+
+namespace Tanks.Complete
+{
+    public class TankShooting : MonoBehaviour
+    {
+        public Rigidbody m_Shell;                   // Prefab of the shell.
+        public Transform m_FireTransform;           // A child of the tank where the shells are spawned.
+        public Slider m_AimSlider;                  // A child of the tank that displays the current launch force.
+        public AudioSource m_ShootingAudio;         // Reference to the audio source used to play the shooting audio.
+        public AudioClip m_ChargingClip;            // Audio that plays when each shot is charging up.
+        public AudioClip m_FireClip;                // Audio that plays when each shot is fired.
+
+        [Tooltip("The speed in unit/second the shell have when fired at minimum charge")]
+        public float m_MinLaunchForce = 5f;
+        [Tooltip("The speed in unit/second the shell have when fired at max charge")]
+        public float m_MaxLaunchForce = 20f;
+        [Tooltip("The maximum time spent charging. When charging reach that time, the shell is fired at MaxLaunchForce")]
+        public float m_MaxChargeTime = 0.75f;
+        [Tooltip("The time that must pass before being able to shoot again after a shot")]
+        public float m_ShotCooldown = 1.0f;
+
+        [Header("Shell Properties")]
+        [Tooltip("The amount of health removed to a tank if they are exactly on the landing spot of a shell")]
+        public float m_MaxDamage = 100f;
+        [Tooltip("The force of the explosion at the shell position. Keep it 50 and below")]
+        public float m_ExplosionForce = 50f;
+        [Tooltip("The radius of the explosion in Unity unit.")]
+        public float m_ExplosionRadius = 5f;
+
+        [Header("ESP32 Serial Settings")]
+        [Tooltip("Enable or disable reading motion trigger from Serial COM Port")]
+        public bool m_UseESP32Serial = true;
+        [Tooltip("The COM port assigned to your ESP32 (e.g., COM8)")]
+        public string m_ComPort = "COM8";
+        [Tooltip("Must match Serial.begin() in ESP32 code")]
+        public int m_BaudRate = 115200;
+
+        [HideInInspector]
+        public TankInputUser m_InputUser;
+
+        public float CurrentChargeRatio =>
+            (m_CurrentLaunchForce - m_MinLaunchForce) / (m_MaxLaunchForce - m_MinLaunchForce);
+        public bool IsCharging => m_IsCharging;
+        public bool m_IsComputerControlled { get; set; } = false;
+
+        private string m_FireButton;
+        private float m_CurrentLaunchForce;
+        private float m_ChargeSpeed;
+        private bool m_Fired;
+        private bool m_HasSpecialShell;
+        private float m_SpecialShellMultiplier;
+        private InputAction fireAction;
+        private bool m_IsCharging = false;
+        private float m_BaseMinLaunchForce;
+        private float m_ShotCooldownTimer;
+
+        // Serial Port variables
+        private SerialPort m_SerialPort;
+        private Thread m_SerialThread;
+        private bool m_IsThreadRunning = false;
+        private bool m_TriggerESP32Fire = false;
+
+        private void OnEnable()
+        {
+            m_CurrentLaunchForce = m_MinLaunchForce;
+            m_BaseMinLaunchForce = m_MinLaunchForce;
+            m_AimSlider.value = m_BaseMinLaunchForce;
+            m_HasSpecialShell = false;
+            m_SpecialShellMultiplier = 1.0f;
+
+            m_AimSlider.minValue = m_MinLaunchForce;
+            m_AimSlider.maxValue = m_MaxLaunchForce;
+        }
+
+        private void Awake()
+        {
+            m_InputUser = GetComponent<TankInputUser>();
+            if (m_InputUser == null)
+                m_InputUser = gameObject.AddComponent<TankInputUser>();
+        }
+
+        private void Start()
+        {
+            m_FireButton = "Fire";
+            fireAction = m_InputUser.ActionAsset.FindAction(m_FireButton);
+            fireAction.Enable();
+
+            m_ChargeSpeed = (m_MaxLaunchForce - m_MinLaunchForce) / m_MaxChargeTime;
+
+            // Initialize Serial connection
+            if (m_UseESP32Serial)
+            {
+                OpenSerialConnection();
+            }
+        }
+
+        private void OpenSerialConnection()
+        {
+            try
+            {
+                m_SerialPort = new SerialPort(m_ComPort, m_BaudRate);
+                m_SerialPort.ReadTimeout = 1000;
+                m_SerialPort.Open();
+
+                m_IsThreadRunning = true;
+                m_SerialThread = new Thread(ReadSerialLoop);
+                m_SerialThread.Start();
+
+                Debug.Log($"[ESP32] Successfully connected to {m_ComPort} at {m_BaudRate} baud!");
+            }
+            catch (Exception e)
+            {
+                Debug.LogError($"[ESP32] Failed to open {m_ComPort}: {e.Message}");
+            }
+        }
+
+        private void ReadSerialLoop()
+        {
+            while (m_IsThreadRunning && m_SerialPort != null && m_SerialPort.IsOpen)
+            {
+                try
+                {
+                    string incomingMessage = m_SerialPort.ReadLine().Trim();
+
+                    if (incomingMessage == "FIRE")
+                    {
+                        m_TriggerESP32Fire = true;
+                    }
+                }
+                catch (TimeoutException)
+                {
+                    // Ignore timeouts, normal when waiting for input
+                }
+                catch (Exception e)
+                {
+                    Debug.LogWarning($"[ESP32] Read warning: {e.Message}");
+                }
+            }
+        }
+
+        private void Update()
+        {
+            // Trigger shot if signal was received from Serial COM port
+            if (m_TriggerESP32Fire)
+            {
+                m_TriggerESP32Fire = false;
+                TriggerESP32Shot();
+            }
+
+            if (!m_IsComputerControlled)
+            {
+                HumanUpdate();
+            }
+            else
+            {
+                ComputerUpdate();
+            }
+        }
+
+        private void TriggerESP32Shot()
+        {
+            if (m_ShotCooldownTimer <= 0)
+            {
+                StartCharging();
+                Invoke(nameof(StopCharging), 0.1f);
+            }
+        }
+
+        public void StartCharging()
+        {
+            m_IsCharging = true;
+            m_Fired = false;
+            m_CurrentLaunchForce = m_MinLaunchForce;
+
+            m_ShootingAudio.clip = m_ChargingClip;
+            m_ShootingAudio.Play();
+        }
+
+        public void StopCharging()
+        {
+            if (m_IsCharging)
+            {
+                Fire();
+                m_IsCharging = false;
+            }
+        }
+
+        void ComputerUpdate()
+        {
+            m_AimSlider.value = m_BaseMinLaunchForce;
+
+            if (m_CurrentLaunchForce >= m_MaxLaunchForce && !m_Fired)
+            {
+                m_CurrentLaunchForce = m_MaxLaunchForce;
+                Fire();
+            }
+            else if (m_IsCharging && !m_Fired)
+            {
+                m_CurrentLaunchForce += m_ChargeSpeed * Time.deltaTime;
+                m_AimSlider.value = m_CurrentLaunchForce;
+            }
+            else if (fireAction.WasReleasedThisFrame() && !m_Fired)
+            {
+                Fire();
+                m_IsCharging = false;
+            }
+        }
+
+        void HumanUpdate()
+        {
+            if (m_ShotCooldownTimer > 0.0f)
+            {
+                m_ShotCooldownTimer -= Time.deltaTime;
+            }
+
+            m_AimSlider.value = m_BaseMinLaunchForce;
+
+            if (m_CurrentLaunchForce >= m_MaxLaunchForce && !m_Fired)
+            {
+                m_CurrentLaunchForce = m_MaxLaunchForce;
+                Fire();
+            }
+            else if (m_ShotCooldownTimer <= 0 && fireAction.WasPressedThisFrame())
+            {
+                m_Fired = false;
+                m_CurrentLaunchForce = m_MinLaunchForce;
+
+                m_ShootingAudio.clip = m_ChargingClip;
+                m_ShootingAudio.Play();
+            }
+            else if (fireAction.IsPressed() && !m_Fired)
+            {
+                m_CurrentLaunchForce += m_ChargeSpeed * Time.deltaTime;
+                m_AimSlider.value = m_CurrentLaunchForce;
+            }
+            else if (fireAction.WasReleasedThisFrame() && !m_Fired)
+            {
+                Fire();
+            }
+        }
+
+        private void Fire()
+        {
+            m_Fired = true;
+
+            Rigidbody shellInstance =
+                Instantiate(m_Shell, m_FireTransform.position, m_FireTransform.rotation) as Rigidbody;
+
+            shellInstance.linearVelocity = m_CurrentLaunchForce * m_FireTransform.forward;
+
+            ShellExplosion explosionData = shellInstance.GetComponent<ShellExplosion>();
+            explosionData.m_ExplosionForce = m_ExplosionForce;
+            explosionData.m_ExplosionRadius = m_ExplosionRadius;
+            explosionData.m_MaxDamage = m_MaxDamage;
+
+            if (m_HasSpecialShell)
+            {
+                explosionData.m_MaxDamage *= m_SpecialShellMultiplier;
+                m_HasSpecialShell = false;
+                m_SpecialShellMultiplier = 1f;
+
+                PowerUpDetector powerUpDetector = GetComponent<PowerUpDetector>();
+                if (powerUpDetector != null)
+                    powerUpDetector.m_HasActivePowerUp = false;
+
+                PowerUpHUD powerUpHUD = GetComponentInChildren<PowerUpHUD>();
+                if (powerUpHUD != null)
+                    powerUpHUD.DisableActiveHUD();
+            }
+
+            m_ShootingAudio.clip = m_FireClip;
+            m_ShootingAudio.Play();
+
+            m_CurrentLaunchForce = m_MinLaunchForce;
+            m_ShotCooldownTimer = m_ShotCooldown;
+        }
+
+        public void EquipSpecialShell(float damageMultiplier)
+        {
+            m_HasSpecialShell = true;
+            m_SpecialShellMultiplier = damageMultiplier;
+        }
+
+        public Vector3 GetProjectilePosition(float chargingLevel)
+        {
+            float chargeLevel = Mathf.Lerp(m_MinLaunchForce, m_MaxLaunchForce, chargingLevel);
+            Vector3 velocity = chargeLevel * m_FireTransform.forward;
+
+            float a = 0.5f * Physics.gravity.y;
+            float b = velocity.y;
+            float c = m_FireTransform.position.y;
+
+            float sqrtContent = b * b - 4 * a * c;
+            if (sqrtContent <= 0)
+            {
+                return m_FireTransform.position;
+            }
+
+            float answer1 = (-b + Mathf.Sqrt(sqrtContent)) / (2 * a);
+            float answer2 = (-b - Mathf.Sqrt(sqrtContent)) / (2 * a);
+
+            float answer = answer1 > 0 ? answer1 : answer2;
+
+            Vector3 position = m_FireTransform.position +
+                               new Vector3(velocity.x, 0, velocity.z) *
+                               answer;
+            position.y = 0;
+
+            return position;
+        }
+
+        private void OnDestroy()
+        {
+            m_IsThreadRunning = false;
+
+            if (m_SerialThread != null && m_SerialThread.IsAlive)
+            {
+                m_SerialThread.Join(500);
+            }
+
+            if (m_SerialPort != null && m_SerialPort.IsOpen)
+            {
+                m_SerialPort.Close();
+            }
+        }
+    }
+}
