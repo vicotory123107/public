@@ -1,0 +1,196 @@
+using UnityEngine;
+using UnityEngine.UI;
+
+namespace Tanks.Complete
+{
+    public class TankHealth : MonoBehaviour
+    {
+        public float m_StartingHealth = 100f;
+        public Slider m_Slider;
+        public Image m_FillImage;
+        public Color m_FullHealthColor = Color.green;
+        public Color m_ZeroHealthColor = Color.red;
+        public GameObject m_ExplosionPrefab;
+
+        [Header("Power Up Settings")]
+        public bool m_HasShield = false;
+
+        private TankShooting m_Shooting;
+        private AudioSource m_ExplosionAudio;
+        private ParticleSystem m_ExplosionParticles;
+        private float m_CurrentHealth;
+        private bool m_Dead;
+        private bool m_IsLowHealthLEDActive = false;
+
+        private void Awake()
+        {
+            m_Shooting = GetComponent<TankShooting>();
+
+            if (m_ExplosionPrefab != null)
+            {
+                GameObject explosionInstance = Instantiate(m_ExplosionPrefab);
+                m_ExplosionParticles = explosionInstance.GetComponent<ParticleSystem>();
+                m_ExplosionAudio = m_ExplosionParticles.GetComponent<AudioSource>();
+                explosionInstance.SetActive(false);
+            }
+        }
+
+        private void OnEnable()
+        {
+            m_CurrentHealth = m_StartingHealth;
+            m_Dead = false;
+            m_HasShield = false;
+            m_IsLowHealthLEDActive = false;
+
+            SetHealthUI();
+
+            // Resets LED state safely when tank enables/spawns
+            if (m_Shooting != null)
+            {
+                m_Shooting.SetLowHealthLED(false);
+            }
+        }
+
+        // --- Shield / Invincibility Handlers ---
+        public void ToggleShield(bool isActive)
+        {
+            m_HasShield = isActive;
+        }
+
+        public void ToggleShield(float duration)
+        {
+            m_HasShield = true;
+            CancelInvoke(nameof(DisableShield));
+            Invoke(nameof(DisableShield), duration);
+        }
+
+        public void ToggleShield()
+        {
+            m_HasShield = !m_HasShield;
+        }
+
+        private void DisableShield()
+        {
+            m_HasShield = false;
+        }
+
+        public void ToggleInvincibility()
+        {
+            m_HasShield = !m_HasShield;
+        }
+
+        public void ToggleInvincibility(bool isInvincible)
+        {
+            m_HasShield = isInvincible;
+        }
+
+        public void ToggleInvincibility(float duration)
+        {
+            ToggleShield(duration);
+        }
+
+        // --- Health & Damage Logic ---
+        public void IncreaseHealth(float amount)
+        {
+            m_CurrentHealth = Mathf.Min(m_CurrentHealth + amount, m_StartingHealth);
+            SetHealthUI();
+
+            float lowHealthThreshold = m_StartingHealth / 8f;
+            if (m_CurrentHealth > lowHealthThreshold && m_IsLowHealthLEDActive)
+            {
+                m_IsLowHealthLEDActive = false;
+                if (m_Shooting != null)
+                {
+                    m_Shooting.SetLowHealthLED(false);
+                }
+            }
+        }
+
+        public void TakeDamage(float amount)
+        {
+            if (m_HasShield)
+            {
+                return;
+            }
+
+            m_CurrentHealth -= amount;
+
+            SetHealthUI();
+
+            // Check for 1/8th health (12.5%) threshold
+            float lowHealthThreshold = m_StartingHealth / 8f;
+
+            if (m_Shooting != null)
+            {
+                if (m_CurrentHealth <= lowHealthThreshold && m_CurrentHealth > 0)
+                {
+                    if (!m_IsLowHealthLEDActive)
+                    {
+                        m_IsLowHealthLEDActive = true;
+                        m_Shooting.SetLowHealthLED(true);
+                    }
+                }
+                else
+                {
+                    if (m_IsLowHealthLEDActive)
+                    {
+                        m_IsLowHealthLEDActive = false;
+                        m_Shooting.SetLowHealthLED(false);
+                    }
+                }
+            }
+
+            if (m_CurrentHealth <= 0f && !m_Dead)
+            {
+                OnDeath();
+            }
+        }
+
+        private void SetHealthUI()
+        {
+            if (m_Slider != null)
+            {
+                m_Slider.value = m_CurrentHealth;
+            }
+
+            if (m_FillImage != null)
+            {
+                m_FillImage.color = Color.Lerp(m_ZeroHealthColor, m_FullHealthColor, m_CurrentHealth / m_StartingHealth);
+            }
+        }
+
+        private void OnDeath()
+        {
+            m_Dead = true;
+
+            if (m_Shooting != null)
+            {
+                m_IsLowHealthLEDActive = false;
+                m_Shooting.SetLowHealthLED(false);
+            }
+
+            if (m_ExplosionParticles != null)
+            {
+                m_ExplosionParticles.transform.position = transform.position;
+                m_ExplosionParticles.gameObject.SetActive(true);
+                m_ExplosionParticles.Play();
+
+                if (m_ExplosionAudio != null)
+                {
+                    m_ExplosionAudio.Play();
+                }
+            }
+
+            gameObject.SetActive(false);
+        }
+
+        public static TankHealth[] FindAllTanks(bool includeInactive = false)
+        {
+            if (includeInactive)
+            {
+                return Object.FindObjectsByType<TankHealth>(FindObjectsInactive.Include);
+            }
+            return Object.FindObjectsByType<TankHealth>();
+        }
+    }
+}
