@@ -1,0 +1,136 @@
+using UnityEngine;
+using UnityEngine.AI;
+
+namespace Tanks.Complete
+{
+    public class TankAI : MonoBehaviour
+    {
+        public float m_CloseEnoughToTarget = 15f;
+        public float m_AttackRange = 25f;
+
+        private NavMeshAgent m_NavAgent;
+        private TankShooting m_Shooting;
+        private TankHealth m_Health;
+        private Transform m_Target;
+
+        private void Awake()
+        {
+            m_NavAgent = GetComponent<NavMeshAgent>();
+            m_Shooting = GetComponent<TankShooting>();
+            m_Health = GetComponent<TankHealth>();
+        }
+
+        public void Setup()
+        {
+            InitAI();
+        }
+
+        public void Setup(Transform target)
+        {
+            InitAI();
+            m_Target = target;
+        }
+
+        public void Setup(object manager)
+        {
+            InitAI();
+        }
+
+        private void InitAI()
+        {
+            m_NavAgent = GetComponent<NavMeshAgent>();
+            m_Shooting = GetComponent<TankShooting>();
+            m_Health = GetComponent<TankHealth>();
+
+            if (m_Shooting != null)
+            {
+                m_Shooting.m_IsComputerControlled = true;
+            }
+        }
+
+        private void OnEnable()
+        {
+            if (m_Shooting != null)
+            {
+                m_Shooting.m_IsComputerControlled = true;
+            }
+        }
+
+        private void Update()
+        {
+            if (m_Target == null)
+            {
+                FindTarget();
+            }
+
+            if (m_Target == null) return;
+
+            float distanceToTarget = Vector3.Distance(transform.position, m_Target.position);
+
+            if (m_NavAgent != null && m_NavAgent.isActiveAndEnabled)
+            {
+                if (distanceToTarget > m_CloseEnoughToTarget)
+                {
+                    m_NavAgent.SetDestination(m_Target.position);
+                    m_NavAgent.isStopped = false;
+                }
+                else
+                {
+                    m_NavAgent.isStopped = true;
+                }
+            }
+
+            if (distanceToTarget <= m_AttackRange)
+            {
+                AimAtTarget();
+                TryShoot();
+            }
+        }
+
+        private void FindTarget()
+        {
+            TankHealth[] tanks = TankHealth.FindAllTanks();
+            float closestDistance = Mathf.Infinity;
+            TankHealth closestTank = null;
+
+            foreach (TankHealth tank in tanks)
+            {
+                if (tank == m_Health || !tank.gameObject.activeInHierarchy) continue;
+
+                float dist = Vector3.Distance(transform.position, tank.transform.position);
+                if (dist < closestDistance)
+                {
+                    closestDistance = dist;
+                    closestTank = tank;
+                }
+            }
+
+            if (closestTank != null)
+            {
+                m_Target = closestTank.transform;
+            }
+        }
+
+        private void AimAtTarget()
+        {
+            Vector3 targetDir = m_Target.position - transform.position;
+            targetDir.y = 0;
+
+            if (targetDir != Vector3.zero)
+            {
+                Quaternion targetRotation = Quaternion.LookRotation(targetDir);
+                transform.rotation = Quaternion.Slerp(transform.rotation, targetRotation, Time.deltaTime * 5f);
+            }
+        }
+
+        private void TryShoot()
+        {
+            if (m_Shooting == null) return;
+
+            if (!m_Shooting.IsCharging)
+            {
+                m_Shooting.StartCharging();
+            }
+        }
+    }
+}
