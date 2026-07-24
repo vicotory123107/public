@@ -1,0 +1,20 @@
+const int PIR_PIN = 13; // Connect your PIR sensor OUT pin to GPIO 13
+int lastMotionState = LOW;
+
+void setup() {
+  // Start Serial communication at 115200 baud
+  Serial.begin(115200);
+  pinMode(PIR_PIN, INPUT);
+}
+
+void loop() {
+  int motionState = digitalRead(PIR_PIN);
+
+  // Trigger when motion starts (rising edge)
+  if (motionState == HIGH && lastMotionState == LOW) {
+    Serial.println("FIRE");
+    delay(300); // Small debounce delay
+  }
+
+  lastMotionState = motionState;
+}
