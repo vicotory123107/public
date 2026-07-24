@@ -1,0 +1,48 @@
+#define LED_PIN 2       // D2 Built-in LED
+#define PIR_PIN 13      // PIR motion sensor output pin
+
+bool isLowHealth = false;
+unsigned long lastFlashTime = 0;
+bool ledState = LOW;
+
+void setup() {
+  Serial.begin(115200);
+  pinMode(LED_PIN, OUTPUT);
+  pinMode(PIR_PIN, INPUT);
+
+  // Quick 1-second blink test on power-up/reset
+  digitalWrite(LED_PIN, HIGH);
+  delay(1000);
+  digitalWrite(LED_PIN, LOW);
+}
+
+void loop() {
+  // 1. Read serial messages sent from Unity
+  if (Serial.available() > 0) {
+    String command = Serial.readStringUntil('\n');
+    command.trim();
+
+    if (command == "LED_ON") {
+      isLowHealth = true;
+    } 
+    else if (command == "LED_OFF") {
+      isLowHealth = false;
+      digitalWrite(LED_PIN, LOW); // Force LED off
+    }
+  }
+
+  // 2. Blink D2 LED every 200ms when health is low
+  if (isLowHealth) {
+    if (millis() - lastFlashTime >= 200) {
+      lastFlashTime = millis();
+      ledState = !ledState;
+      digitalWrite(LED_PIN, ledState);
+    }
+  }
+
+  // 3. Read PIR Sensor and send trigger signal to Unity
+  if (digitalRead(PIR_PIN) == HIGH) {
+    Serial.println("FIRE");
+    delay(800); // Prevents rapid duplicate triggers
+  }
+}
