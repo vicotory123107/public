@@ -1,0 +1,34 @@
+const int analogPin = 34;    // AO connected to GPIO 34 (ADC1)
+const int onboardLED = 2;    // Built-in LED on GPIO 2 (D2)
+
+// Set threshold to 300
+const int soundThreshold = 300; 
+
+void setup() {
+  Serial.begin(115200);
+  pinMode(onboardLED, OUTPUT);
+  digitalWrite(onboardLED, LOW);
+}
+
+void loop() {
+  // Read the analog sound level (0 to 4095)
+  int soundLevel = analogRead(analogPin);
+
+  // Check if sound goes above 300
+  if (soundLevel > soundThreshold) {
+    // Send fire command instantly to Unity
+    Serial.println("FIRE");
+    
+    // Quick flash on the ESP32 LED (just 150ms total for speed)
+    digitalWrite(onboardLED, HIGH);
+    delay(75);
+    digitalWrite(onboardLED, LOW);
+    delay(75);
+    
+    // Tiny cooldown to avoid multiple rapid triggers from a single sound
+    delay(150); 
+  }
+
+  // Minimal delay for maximum responsiveness
+  delay(10); 
+}
