@@ -1,0 +1,766 @@
+// Copyright 2021, Infima Games. All Rights Reserved.
+using System.Linq;
+using UnityEngine;
+
+namespace InfimaGames.LowPolyShooterPack
+{
+    [RequireComponent(typeof(Rigidbody), typeof(CapsuleCollider))]
+    public class Movement : MovementBehaviour
+    {
+        #region FIELDS SERIALIZED
+
+        [Header("Audio Clips")]
+
+        [Tooltip("The audio clip that is played while walking.")]
+        [SerializeField]
+        private AudioClip audioClipWalking;
+
+        [Tooltip("The audio clip that is played while running.")]
+        [SerializeField]
+        private AudioClip audioClipRunning;
+
+        [Header("Speeds")]
+
+        [SerializeField]
+        private float speedWalking = 5.0f;
+
+        [Tooltip("How fast the player moves while running."), SerializeField]
+        private float speedRunning = 9.0f;
+
+        [Tooltip("How fast the player moves while crouching."), SerializeField]
+        private float speedCrouching = 2.5f;
+
+        [Tooltip("Initial boost speed when starting a slide."), SerializeField]
+        private float slideSpeed = 12.0f;
+
+        [Header("Jumping & Wall Mechanics")]
+        [Tooltip("The vertical force applied when jumping.")]
+        [SerializeField]
+        private float jumpForce = 5.0f;
+
+        [Tooltip("How fast the player slides down a wall."), SerializeField]
+        private float wallSlideSpeed = 2.0f;
+
+        [Tooltip("Force applied when jumping off a wall.")]
+        [SerializeField]
+        private float wallJumpForce = 7.0f;
+
+        [Tooltip("Extra speed multiplier or boost added when jumping off a wall."), SerializeField]
+        private float wallJumpBoostMultiplier = 1.5f;
+
+        [Header("Ledge Clambering & Hurdling")]
+        [Tooltip("Layers that can be clambered or hurdled onto.")]
+        [SerializeField]
+        private LayerMask clamberLayer;
+        [Tooltip("Forward distance to check for a wall when trying to clamber or hurdle."), SerializeField]
+        private float clamberCheckDistance = 0.8f;
+        [Tooltip("Height above the player's head to check for the ledge top."), SerializeField]
+        private float clamberLedgeHeightCheck = 1.5f;
+        [Tooltip("Height check for hurdles."), SerializeField]
+        private float hurdleHeightCheck = 0.8f;
+        [Tooltip("Upward boost force when completing the clamber move."), SerializeField]
+        private float clamberUpForce = 6.0f;
+        [Tooltip("Forward boost force when completing the clamber move."), SerializeField]
+        private float clamberForwardForce = 4.0f;
+        [Tooltip("Upward boost force when completing the hurdle move."), SerializeField]
+        private float hurdleUpForce = 4.0f;
+        [Tooltip("Forward boost force when completing the hurdle move."), SerializeField]
+        private float hurdleForwardForce = 5.0f;
+
+        [Header("Gliding")]
+        [SerializeField]
+        private float glideBaseSpeed = 8f;
+        [SerializeField]
+        private float glideMaxSpeed = 35f; // Increased slightly to handle higher altitude dives
+        [SerializeField]
+        private float glideAcceleration = 10f;
+        [SerializeField]
+        private float glideDrag = 2f;
+        [SerializeField]
+        private float glideShiftBoostSpeed = 15f;
+        [SerializeField]
+        private float glideSteerSpeed = 5f;
+        [Tooltip("Multiplier for how much faster you go based on your height/altitude."), SerializeField]
+        private float altitudeSpeedMultiplier = 0.05f;
+
+        [Header("Spider-Man Web-Swinging")]
+        [Tooltip("Max distance the web/grapple can reach."), SerializeField]
+        private float grappleMaxDistance = 40f;
+        [Tooltip("Layers that the web can attach to."), SerializeField]
+        private LayerMask grappleLayer;
+        [Tooltip("How strongly movement input pushes you while swinging."), SerializeField]
+        private float swingPushForce = 30f;
+        [Tooltip("Multiplier for reeling in (holding Z) or extending rope (holding B)."), SerializeField]
+        private float ropeAdjustmentSpeed = 12f;
+        [Tooltip("Forward and upward boost force when releasing the web (X)."), SerializeField]
+        private float webReleaseBoost = 22f;
+        [Tooltip("Cooldown time before you can shoot another web/grapple hook."), SerializeField]
+        private float grappleCooldown = 0.0f;
+        [Tooltip("Automatic forward momentum applied to make the swing naturally arc forward on its own."), SerializeField]
+        private float automaticSwingForce = 35f;
+
+        [Header("Slow Motion")]
+        [Tooltip("The time scale multiplier when slow motion is active."), SerializeField]
+        private float slowMotionScale = 0.3f;
+
+        [Header("Stance Heights")]
+        [SerializeField]
+        private float normalHeight = 0.8f;
+        [SerializeField]
+        private float crouchHeight = 0.6f;
+        [SerializeField]
+        private float slideHeight = 0.4f;
+        [SerializeField]
+        private float heightSmoothSpeed = 15.0f;
+
+        [Header("Camera Height Offsets")]
+        [SerializeField]
+        private Transform playerCamera;
+        [SerializeField]
+        private float normalCameraY = 0.6f;
+        [SerializeField]
+        private float crouchCameraY = 0.45f;
+        [SerializeField]
+        private float slideCameraY = 0.3f;
+
+        [Header("Visuals Scale Scaling")]
+        [SerializeField]
+        private Transform playerVisuals;
+        [SerializeField]
+        private Vector3 normalScale = new Vector3(1f, 0.5f, 1f);
+        [SerializeField]
+        private Vector3 crouchScale = new Vector3(1f, 0.35f, 1f);
+        [SerializeField]
+        private Vector3 slideScale = new Vector3(1f, 0.25f, 1f);
+
+        #endregion
+
+        #region PROPERTIES
+
+        private Vector3 Velocity
+        {
+            get => rigidBody.linearVelocity;
+            set => rigidBody.linearVelocity = value;
+        }
+
+        #endregion
+
+        #region FIELDS
+
+        private Rigidbody rigidBody;
+        private CapsuleCollider capsule;
+        private AudioSource audioSource;
+
+        private bool grounded;
+        private bool isCrouching;
+        private bool isSliding;
+        private bool isWallSliding;
+        private bool isWallLatched;
+        private bool isSlowMotion;
+        private bool isClambering;
+        private bool isHurdling;
+        private bool isGliding;
+        private bool inWindTunnel;
+        private float currentGlideSpeed;
+
+        private bool isSwinging;
+        private Vector3 swingAnchorPoint;
+        private float currentRopeLength;
+        private LineRenderer grappleLineRenderer;
+        private float grappleCooldownTimer;
+
+        private float defaultFixedDeltaTime;
+        private Vector3 slideDirection;
+        private Vector3 currentWallNormal;
+
+        private CharacterBehaviour playerCharacter;
+        private WeaponBehaviour equippedWeapon;
+
+        private readonly RaycastHit[] groundHits = new RaycastHit[8];
+
+        #endregion
+
+        #region UNITY FUNCTIONS
+
+        protected override void Awake()
+        {
+            playerCharacter = ServiceLocator.Current.Get<IGameModeService>().GetPlayerCharacter();
+        }
+
+        protected override void Start()
+        {
+            rigidBody = GetComponent<Rigidbody>();
+            rigidBody.constraints = RigidbodyConstraints.FreezeRotation;
+
+            capsule = GetComponent<CapsuleCollider>();
+            normalHeight = capsule.height;
+
+            audioSource = GetComponent<AudioSource>();
+            audioSource.clip = audioClipWalking;
+            audioSource.loop = true;
+
+            if (playerCamera == null && Camera.main != null)
+                playerCamera = Camera.main.transform;
+
+            if (playerVisuals == null)
+                playerVisuals = transform;
+
+            grappleLineRenderer = GetComponent<LineRenderer>();
+            if (grappleLineRenderer == null)
+            {
+                grappleLineRenderer = gameObject.AddComponent<LineRenderer>();
+            }
+            grappleLineRenderer.positionCount = 0;
+            grappleLineRenderer.startWidth = 0.06f;
+            grappleLineRenderer.endWidth = 0.06f;
+
+            Color neonBlue = new Color(0.0f, 0.8f, 2.0f, 1.0f);
+            grappleLineRenderer.startColor = neonBlue;
+            grappleLineRenderer.endColor = neonBlue;
+
+            if (grappleLineRenderer.sharedMaterial == null)
+            {
+                grappleLineRenderer.sharedMaterial = new Material(Shader.Find("Sprites/Default"));
+            }
+
+            defaultFixedDeltaTime = Time.fixedDeltaTime;
+        }
+
+        private void OnCollisionStay()
+        {
+            Bounds bounds = capsule.bounds;
+            Vector3 extents = bounds.extents;
+            float radius = extents.x - 0.01f;
+
+            Physics.SphereCastNonAlloc(bounds.center, radius, Vector3.down,
+                groundHits, extents.y - radius * 0.5f, ~0, QueryTriggerInteraction.Ignore);
+
+            if (!groundHits.Any(hit => hit.collider != null && hit.collider != capsule))
+                return;
+
+            for (var i = 0; i < groundHits.Length; i++)
+                groundHits[i] = new RaycastHit();
+
+            grounded = true;
+            isWallLatched = false;
+        }
+
+        protected override void FixedUpdate()
+        {
+            if (!isClambering && !isHurdling)
+            {
+                CheckWallSlide();
+                CheckClamberAndHurdle();
+                MoveCharacter();
+            }
+            grounded = false;
+        }
+
+        protected override void Update()
+        {
+            if (playerCharacter != null && playerCharacter.GetInventory() != null)
+                equippedWeapon = playerCharacter.GetInventory().GetEquipped();
+
+            if (grappleCooldownTimer > 0f)
+                grappleCooldownTimer -= Time.unscaledDeltaTime;
+
+            HandleInputs();
+            HandleStance();
+            PlayFootstepSounds();
+        }
+
+        protected override void LateUpdate()
+        {
+            base.LateUpdate();
+
+            if (isSwinging && grappleLineRenderer != null)
+            {
+                grappleLineRenderer.positionCount = 2;
+                grappleLineRenderer.SetPosition(0, transform.position + Vector3.up * 0.5f);
+                grappleLineRenderer.SetPosition(1, swingAnchorPoint);
+            }
+        }
+
+        #endregion
+
+        #region METHODS
+
+        private void CheckClamberAndHurdle()
+        {
+            if (isClambering || isHurdling || grounded || isSwinging) return;
+
+            Vector3 rayOrigin = transform.position + Vector3.up * 0.3f;
+            if (Physics.Raycast(rayOrigin, transform.forward, out RaycastHit wallHit, clamberCheckDistance, clamberLayer))
+            {
+                Vector3 hurdleCheckOrigin = wallHit.point + transform.forward * 0.1f + Vector3.up * hurdleHeightCheck;
+                if (!Physics.Raycast(hurdleCheckOrigin, Vector3.down, hurdleHeightCheck + 0.2f, clamberLayer))
+                {
+                    StartHurdle();
+                    return;
+                }
+
+                Vector3 ledgeCheckOrigin = wallHit.point + transform.forward * 0.1f + Vector3.up * clamberLedgeHeightCheck;
+                if (Physics.Raycast(ledgeCheckOrigin, Vector3.down, out RaycastHit ledgeHit, clamberLedgeHeightCheck + 0.2f, clamberLayer))
+                {
+                    float playerFeetY = transform.position.y;
+                    float ledgeTopY = ledgeHit.point.y;
+                    float heightDifference = ledgeTopY - playerFeetY;
+
+                    if (heightDifference > 0.5f && heightDifference < 1.6f)
+                    {
+                        StartClamber();
+                    }
+                }
+            }
+        }
+
+        private void StartHurdle()
+        {
+            isHurdling = true;
+            isGliding = false;
+            rigidBody.useGravity = false;
+
+            Vector3 hurdleVelocity = (Vector3.up * hurdleUpForce) + (transform.forward * hurdleForwardForce);
+            rigidBody.linearVelocity = hurdleVelocity;
+
+            Invoke(nameof(EndHurdle), 0.25f);
+        }
+
+        private void EndHurdle()
+        {
+            isHurdling = false;
+            rigidBody.useGravity = true;
+        }
+
+        private void StartClamber()
+        {
+            isClambering = true;
+            isWallSliding = false;
+            isWallLatched = false;
+            isGliding = false;
+            rigidBody.useGravity = false;
+
+            Vector3 clamberVelocity = (Vector3.up * clamberUpForce) + (transform.forward * clamberForwardForce);
+            rigidBody.linearVelocity = clamberVelocity;
+
+            Invoke(nameof(EndClamber), 0.35f);
+        }
+
+        private void EndClamber()
+        {
+            isClambering = false;
+            rigidBody.useGravity = true;
+        }
+
+        private void CheckWallSlide()
+        {
+            isWallSliding = false;
+
+            if (!grounded)
+            {
+                float rayDistance = capsule.radius + 0.15f;
+                Vector3 rayOrigin = capsule.bounds.center;
+
+                bool hitLeft = Physics.Raycast(rayOrigin, -transform.right, out RaycastHit leftHit, rayDistance);
+                bool hitRight = Physics.Raycast(rayOrigin, transform.right, out RaycastHit rightHit, rayDistance);
+
+                if (hitLeft || hitRight)
+                {
+                    currentWallNormal = hitLeft ? leftHit.normal : rightHit.normal;
+
+                    Vector2 frameInput = playerCharacter != null ? playerCharacter.GetInputMovement() : Vector2.zero;
+                    bool isMoving = frameInput.sqrMagnitude > 0.1f;
+
+                    if (isMoving && isWallLatched)
+                    {
+                        isWallLatched = false;
+                    }
+
+                    if (!isWallLatched && rigidBody.linearVelocity.y <= 0f)
+                    {
+                        if (!isMoving)
+                        {
+                            isWallLatched = true;
+                        }
+                    }
+
+                    if (isWallLatched)
+                    {
+                        isWallSliding = true;
+                        rigidBody.linearVelocity = new Vector3(rigidBody.linearVelocity.x, 0f, rigidBody.linearVelocity.z);
+                    }
+                    else if (rigidBody.linearVelocity.y < 0f)
+                    {
+                        isWallSliding = true;
+                        Vector3 vel = rigidBody.linearVelocity;
+                        vel.y = Mathf.Max(vel.y, -wallSlideSpeed);
+                        rigidBody.linearVelocity = vel;
+                    }
+                }
+                else
+                {
+                    isWallLatched = false;
+                }
+            }
+            else
+            {
+                isWallLatched = false;
+            }
+        }
+
+        private void HandleInputs()
+        {
+            bool isRunningState = playerCharacter != null && playerCharacter.IsRunning();
+            bool isMovingForward = playerCharacter != null && playerCharacter.GetInputMovement().y > 0.1f;
+            bool isHoldingC = Input.GetKey(KeyCode.C);
+
+            if (Input.GetKeyDown(KeyCode.V))
+            {
+                StartSwing();
+            }
+
+            if (Input.GetKeyDown(KeyCode.X))
+            {
+                ReleaseSwing();
+            }
+
+            if (Input.GetKeyDown(KeyCode.F))
+            {
+                if (!grounded && !isSwinging)
+                {
+                    isGliding = !isGliding;
+                    if (isGliding)
+                    {
+                        currentGlideSpeed = Mathf.Max(rigidBody.linearVelocity.magnitude, glideBaseSpeed);
+                    }
+                    else
+                    {
+                        rigidBody.useGravity = true;
+                    }
+                }
+            }
+
+            if (Input.GetKeyDown(KeyCode.C) && isMovingForward && isRunningState && grounded && !isSliding)
+            {
+                StartSlide();
+                return;
+            }
+
+            if (isSliding)
+            {
+                if (!isHoldingC || !isMovingForward || !grounded || !isRunningState)
+                {
+                    isSliding = false;
+                }
+            }
+            else
+            {
+                if (Input.GetKeyDown(KeyCode.C))
+                {
+                    isCrouching = !isCrouching;
+                }
+            }
+
+            if (Input.GetKeyDown(KeyCode.Space))
+            {
+                if (grounded && !isSliding && !isCrouching)
+                {
+                    Jump();
+                }
+                else if (isWallSliding || isWallLatched)
+                {
+                    WallJump();
+                }
+            }
+
+            if (Input.GetKeyDown(KeyCode.E))
+            {
+                isSlowMotion = !isSlowMotion;
+
+                if (isSlowMotion)
+                {
+                    Time.timeScale = slowMotionScale;
+                    audioSource.pitch = slowMotionScale;
+                }
+                else
+                {
+                    Time.timeScale = 1.0f;
+                    audioSource.pitch = 1.0f;
+                }
+
+                Time.fixedDeltaTime = defaultFixedDeltaTime * Time.timeScale;
+            }
+        }
+
+        private void StartSwing()
+        {
+            if (playerCamera == null || grappleCooldownTimer > 0f) return;
+
+            Ray ray = new Ray(playerCamera.position, playerCamera.forward);
+            if (Physics.Raycast(ray, out RaycastHit hit, grappleMaxDistance, grappleLayer))
+            {
+                isSwinging = true;
+                isGliding = false;
+                inWindTunnel = false;
+                swingAnchorPoint = hit.point;
+                currentRopeLength = Vector3.Distance(transform.position, swingAnchorPoint);
+
+                rigidBody.linearVelocity += (Vector3.up * 6f) + (playerCamera.forward * 8f);
+            }
+        }
+
+        private void ReleaseSwing()
+        {
+            if (!isSwinging) return;
+
+            isSwinging = false;
+            grappleCooldownTimer = grappleCooldown;
+
+            if (grappleLineRenderer != null)
+                grappleLineRenderer.positionCount = 0;
+
+            Vector3 releaseDir = playerCamera != null ? playerCamera.forward : transform.forward;
+            releaseDir.y = Mathf.Max(releaseDir.y, 0.35f);
+
+            rigidBody.linearVelocity = releaseDir.normalized * webReleaseBoost + rigidBody.linearVelocity * 0.5f;
+        }
+
+        private void StartSlide()
+        {
+            isSliding = true;
+            isCrouching = false;
+            isGliding = false;
+
+            Vector2 frameInput = playerCharacter != null ? playerCharacter.GetInputMovement() : Vector2.zero;
+            Vector3 inputDir = new Vector3(frameInput.x, 0.0f, frameInput.y);
+
+            if (inputDir.sqrMagnitude < 0.1f)
+                slideDirection = transform.forward;
+            else
+                slideDirection = transform.TransformDirection(inputDir).normalized;
+        }
+
+        private void Jump()
+        {
+            Vector3 vel = rigidBody.linearVelocity;
+            vel.y = jumpForce;
+            rigidBody.linearVelocity = vel;
+            grounded = false;
+            isGliding = false;
+        }
+
+        private void WallJump()
+        {
+            Vector3 jumpDir = (currentWallNormal + Vector3.up).normalized;
+            rigidBody.linearVelocity = jumpDir * wallJumpForce * wallJumpBoostMultiplier;
+
+            isWallSliding = false;
+            isWallLatched = false;
+            isGliding = false;
+        }
+
+        private void HandleStance()
+        {
+            float targetHeight;
+            float targetCenterY;
+            float targetCameraY;
+            Vector3 targetScale;
+
+            if (isSliding)
+            {
+                targetHeight = slideHeight;
+                targetCenterY = slideHeight / 2.0f;
+                targetCameraY = slideCameraY;
+                targetScale = slideScale;
+            }
+            else if (isCrouching)
+            {
+                targetHeight = crouchHeight;
+                targetCenterY = crouchHeight / 2.0f;
+                targetCameraY = crouchCameraY;
+                targetScale = crouchScale;
+            }
+            else
+            {
+                targetHeight = normalHeight;
+                targetCenterY = normalHeight / 2.0f;
+                targetCameraY = normalCameraY;
+                targetScale = normalScale;
+            }
+
+            capsule.height = Mathf.Lerp(capsule.height, targetHeight, Time.deltaTime * heightSmoothSpeed);
+            capsule.center = Vector3.Lerp(capsule.center, new Vector3(0, targetCenterY, 0), Time.deltaTime * heightSmoothSpeed);
+
+            if (playerCamera != null)
+            {
+                Vector3 localPos = playerCamera.localPosition;
+                localPos.y = Mathf.Lerp(localPos.y, targetCameraY, Time.deltaTime * heightSmoothSpeed);
+                playerCamera.localPosition = localPos;
+            }
+
+            if (playerVisuals != null)
+            {
+                playerVisuals.localScale = Vector3.Lerp(playerVisuals.localScale, targetScale, Time.deltaTime * heightSmoothSpeed);
+            }
+        }
+
+        private void MoveCharacter()
+        {
+            Vector3 finalMovement;
+
+            if (isGliding)
+            {
+                if (grounded)
+                {
+                    isGliding = false;
+                    inWindTunnel = false;
+                    rigidBody.useGravity = true;
+                    return;
+                }
+
+                if (isSliding) isSliding = false;
+                isCrouching = false;
+                rigidBody.useGravity = false;
+
+                if (playerCamera != null)
+                {
+                    Vector3 flatForward = Vector3.ProjectOnPlane(playerCamera.forward, Vector3.up).normalized;
+                    if (flatForward != Vector3.zero)
+                    {
+                        Quaternion targetRot = Quaternion.LookRotation(flatForward, Vector3.up);
+                        transform.rotation = Quaternion.Slerp(transform.rotation, targetRot, Time.fixedDeltaTime * glideSteerSpeed);
+                    }
+                }
+
+                float pitch = playerCamera != null ? playerCamera.forward.y : 0f;
+
+                // Higher altitude gives a boost to downward acceleration/speed
+                float heightBonus = transform.position.y * altitudeSpeedMultiplier;
+
+                if (pitch < 0f)
+                {
+                    currentGlideSpeed += (Mathf.Abs(pitch) + heightBonus) * glideAcceleration * Time.fixedDeltaTime;
+                }
+                else
+                {
+                    currentGlideSpeed -= pitch * glideDrag * 2f * Time.fixedDeltaTime;
+                }
+
+                bool isPressingW = Input.GetKey(KeyCode.W);
+                bool isPressingShift = Input.GetKey(KeyCode.LeftShift) || Input.GetKey(KeyCode.RightShift);
+
+                if (isPressingW && isPressingShift)
+                {
+                    currentGlideSpeed += glideShiftBoostSpeed * Time.fixedDeltaTime;
+                }
+
+                if (inWindTunnel)
+                {
+                    currentGlideSpeed += glideAcceleration * 1.5f * Time.fixedDeltaTime;
+                }
+
+                currentGlideSpeed -= glideDrag * 0.25f * Time.fixedDeltaTime;
+                currentGlideSpeed = Mathf.Clamp(currentGlideSpeed, glideBaseSpeed, glideMaxSpeed);
+
+                Vector3 glideMoveDir = playerCamera != null ? playerCamera.forward : transform.forward;
+                Vector3 targetVel = glideMoveDir * currentGlideSpeed;
+                rigidBody.linearVelocity = Vector3.Lerp(rigidBody.linearVelocity, targetVel, Time.fixedDeltaTime * 10f);
+                return;
+            }
+            else
+            {
+                if (!isClambering && !isHurdling)
+                {
+                    rigidBody.useGravity = true;
+                }
+            }
+
+            if (isSwinging)
+            {
+                if (Input.GetKey(KeyCode.Z))
+                {
+                    currentRopeLength -= ropeAdjustmentSpeed * Time.fixedDeltaTime;
+                    currentRopeLength = Mathf.Max(currentRopeLength, 2f);
+                }
+                else if (Input.GetKey(KeyCode.B))
+                {
+                    currentRopeLength += ropeAdjustmentSpeed * Time.fixedDeltaTime;
+                }
+
+                Vector3 playerPos = transform.position;
+                Vector3 ropeVector = playerPos - swingAnchorPoint;
+                float currentDistance = ropeVector.magnitude;
+
+                if (currentDistance > currentRopeLength)
+                {
+                    Vector3 tensionDir = -ropeVector.normalized;
+                    float overshoot = currentDistance - currentRopeLength;
+
+                    float springK = 150f;
+                    rigidBody.AddForce(tensionDir * overshoot * springK, ForceMode.Acceleration);
+
+                    Vector3 currentVel = rigidBody.linearVelocity;
+                    float radialVel = Vector3.Dot(currentVel, ropeVector.normalized);
+                    if (radialVel > 0f)
+                    {
+                        rigidBody.linearVelocity -= ropeVector.normalized * radialVel * 0.5f;
+                    }
+                }
+
+                Vector3 forwardDir = playerCamera != null ? Vector3.ProjectOnPlane(playerCamera.forward, Vector3.up).normalized : transform.forward;
+                rigidBody.AddForce(forwardDir * automaticSwingForce, ForceMode.Acceleration);
+
+                Vector2 frameInput = playerCharacter != null ? playerCharacter.GetInputMovement() : Vector2.zero;
+                if (frameInput.sqrMagnitude > 0.01f)
+                {
+                    Vector3 inputDir = new Vector3(frameInput.x, 0.0f, frameInput.y);
+                    Vector3 worldInput = playerCamera != null ?
+                        (playerCamera.right * inputDir.x + Vector3.ProjectOnPlane(playerCamera.forward, Vector3.up).normalized * inputDir.z) :
+                        transform.TransformDirection(inputDir);
+
+                    rigidBody.AddForce(worldInput * swingPushForce, ForceMode.Acceleration);
+                }
+                return;
+            }
+            else if (isSliding)
+            {
+                finalMovement = slideDirection * slideSpeed;
+            }
+            else if (isWallLatched)
+            {
+                finalMovement = Vector3.zero;
+            }
+            else
+            {
+                Vector2 frameInput = playerCharacter != null ? playerCharacter.GetInputMovement() : Vector2.zero;
+                var movement = new Vector3(frameInput.x, 0.0f, frameInput.y);
+
+                if (isCrouching)
+                    movement *= speedCrouching;
+                else if (playerCharacter != null && playerCharacter.IsRunning())
+                    movement *= speedRunning;
+                else
+                    movement *= speedWalking;
+
+                finalMovement = transform.TransformDirection(movement);
+            }
+
+            Velocity = new Vector3(finalMovement.x, rigidBody.linearVelocity.y, finalMovement.z);
+        }
+
+        private void PlayFootstepSounds()
+        {
+            bool isRunning = playerCharacter != null && playerCharacter.IsRunning();
+            if (grounded && rigidBody.linearVelocity.sqrMagnitude > 0.1f && !isSliding && !isSwinging && !isGliding)
+            {
+                audioSource.clip = isRunning ? audioClipRunning : audioClipWalking;
+                if (!audioSource.isPlaying)
+                    audioSource.Play();
+            }
+            else if (audioSource.isPlaying)
+                audioSource.Pause();
+        }
+
+        #endregion
+    }
+}
